@@ -1,3 +1,7 @@
+"""
+@author: cuiyi
+"""
+
 import numpy as np
 
 class FeatureTransformer:
