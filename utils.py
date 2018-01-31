@@ -1,5 +1,5 @@
 """
-@author: cuiyi
+@author: Yi Cui
 """
 
 import numpy as np
