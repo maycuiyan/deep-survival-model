@@ -5,7 +5,7 @@ This repo contains the tensorflow implementation of building a deep survival mod
 
 A step-by-step guide to use the codes is demonstrated in [template.ipynb](https://github.com/maycuiyan/deep-survival-model/blob/master/template.ipynb).
 
-We provide convenient functions to facilitate traning a survival model from multiple (possibly very heterogneous) datasets. In particular, 
+We provide functions and classes to streamline traning a survival model from multiple (possibly very heterogneous) datasets. In particular, 
 
 * [utils.py](https://github.com/maycuiyan/deep-survival-model/blob/master/utils.py) provides various utility functions to maniputate multiple survival datasets. 
 
