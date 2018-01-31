@@ -5,5 +5,12 @@ This repo contains the tensorflow implementation of building a deep survival mod
 
 A step-by-step guide to use the codes is demonstrated in [template.ipynb](https://github.com/maycuiyan/deep-survival-model/blob/master/template.ipynb).
 
-We provide various convenience functions to facilitate traning a **survival model** from multiple datasets. In particular, 
-*
+We provide convenient functions to facilitate traning a **survival model** from multiple (possibly very heterogneous) datasets. In particular, 
+
+* [utils.py](https://github.com/maycuiyan/deep-survival-model/blob/master/utils.py) provides various utility functions to maniputate multiple survival datasets. 
+
+* [preprocessing.py](https://github.com/maycuiyan/deep-survival-model/blob/master/preprocessing.py) provides *zscore* and *percentile-rank* transformation methods that are commonly used to standardize gene expression profiles. 
+
+* [feature_selection.py](https://github.com/maycuiyan/deep-survival-model/blob/master/feature_selection.py) implements a *meta-analysis*-based feature selection using concordance index as score function. 
+
+* [models.py](https://github.com/maycuiyan/deep-survival-model/blob/master/models.py) provides the core SurvivalModel class, which has the fit() and predict() methods to streamline the training of survival models. This class also renders the flexibility of user specified deep learning models by leveraging the high-level Keras callable models (see [template.ipynb](https://github.com/maycuiyan/deep-survival-model/blob/master/template.ipynb) for details). 
