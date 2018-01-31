@@ -91,7 +91,10 @@ class SurvivalModel:
 			y2 = tf.gather(y_pred, idx2)
 
 		with tf.name_scope('metrics'):
-			loss = tf.reduce_mean(tf.maximum(1+y1-y2, 0.0), name='loss') # alternatively: loss = tf.reduce_mean(tf.log(1+tf.exp(y1-y2)))
+			if self.loss_func=='hinge':
+				loss = tf.reduce_mean(tf.maximum(1+y1-y2, 0.0), name='loss')
+			elif self.loss_func=='logloss':
+				loss = tf.reduce_mean(tf.log(1+tf.exp(y1-y2)), name='loss')
 			ci = tf.reduce_mean(tf.cast(y1<y2, tf.float32), name='c_index')
 
 		with tf.name_scope('train'):
@@ -129,18 +132,11 @@ class SurvivalModel:
 		for epoch in range(self.epochs):
 			for i, (X_batch, _, _) in enumerate(self.datasets_train):
 				idx1_batch, idx2_batch = index_pairs_train[i]
-				sess.run(train_op, feed_dict={X: X_batch, \
-											  idx1: idx1_batch, \
-											  idx2: idx2_batch, \
-											  K.learning_phase(): 1})
+				sess.run(train_op, feed_dict={X: X_batch, idx1: idx1_batch, idx2: idx2_batch, K.learning_phase(): 1})
 			if epoch%100==0:
 				loss_train, ci_train = self._total_loss_ci(self.datasets_train, index_pairs_train, sess)
 				loss_val, ci_val = self._total_loss_ci(self.datasets_val, index_pairs_val, sess)
-				print('Epoch {0}: loss_train={1:5.4f}, ci_train={2:5.4f}, loss_val={3:5.4f}, ci_val={4:5.4f}'.format(epoch, \
-																													 loss_train, \
-																													 ci_train, \
-																													 loss_val, \
-																													 ci_val))
+				print('Epoch {0}: loss_train={1:5.4f}, ci_train={2:5.4f}, loss_val={3:5.4f}, ci_val={4:5.4f}'.format(epoch, loss_train, ci_train, loss_val, ci_val))
 		self.sess = sess
 
 
@@ -179,18 +175,11 @@ class SurvivalModel:
 			for _ in range(num_batches):
 				X_batch, time_batch, event_batch = next_batch()
 				idx1_batch, idx2_batch = utils.get_index_pairs([(X_batch, time_batch, event_batch)])[0]
-				sess.run(train_op, feed_dict={X: X_batch, \
-											  idx1: idx1_batch, \
-											  idx2: idx2_batch, \
-											  K.learning_phase(): 1})
+				sess.run(train_op, feed_dict={X: X_batch, idx1: idx1_batch, idx2: idx2_batch, K.learning_phase(): 1})
 			if epoch%100==0:
 				loss_train, ci_train = self._total_loss_ci(self.datasets_train, index_pairs_train, sess)
 				loss_val, ci_val = self._total_loss_ci(self.datasets_val, index_pairs_val, sess)
-				print('Epoch {0}: loss_train={1:5.4f}, ci_train={2:5.4f}, loss_val={3:5.4f}, ci_val={4:5.4f}'.format(epoch, \
-																													 loss_train, \
-																													 ci_train, \
-																													 loss_val, \
-																													 ci_val))
+				print('Epoch {0}: loss_train={1:5.4f}, ci_train={2:5.4f}, loss_val={3:5.4f}, ci_val={4:5.4f}'.format(epoch, loss_train, ci_train, loss_val, ci_val))
 		self.sess = sess
 
 
