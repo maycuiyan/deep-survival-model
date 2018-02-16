@@ -1,3 +1,4 @@
 .ipynb_checkpoints/*
 __pycache__/*
-demo.ipynb
+demo_gene.ipynb
+demo_image.ipynb
