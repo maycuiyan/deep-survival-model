@@ -5,6 +5,7 @@
 import tensorflow as tf
 import utils
 import keras.backend as K
+import numpy as np
 
 
 class SurvivalModel:
@@ -16,17 +17,19 @@ class SurvivalModel:
 		'''
 		self.model_builder = model_builder
 
-	def fit(self, datasets_train, datasets_val, loss_func='hinge', epochs=500, lr=0.001, mode='decentral', batch_size = 64):
+
+
+	def fit(self, datasets_train, datasets_val, loss_func='hinge', epochs=500, lr=0.001, mode='decentralize', batch_size = 64):
 		'''
 		Train a deep survival model
 		Args
 			datasets_train:     training datasets, a list of (X, time, event) tuples
 			datasets_val:       validation datasets, a list of (X, time, event) tuples
-			loss_func:          loss function to approximate concordance index, {'hinge', 'logloss', 'cox'}
+			loss_func:          loss function to approximate concordance index, {'hinge', 'log', 'cox'}
 			epochs:             number of epochs to train
 			lr:                 learning rate
 			mode:               if mode=='merge', merge datasets before training
-								if mode='decentral', treat each dataset as a mini-batch
+								if mode='decentralize', treat each dataset as a mini-batch
 			batch_size:         only effective for 'merge' mode
 		'''
 
@@ -37,118 +40,80 @@ class SurvivalModel:
 		self.lr = lr
 		self.batch_size = batch_size
 
-		self._build_graph()
+		## build a tensorflow graph to define loss function
+		self.__build_graph()
 		
+		## train the model
 		if mode=='merge':
-		  self._train_merge()
-		elif mode=='decentral':
-		  self._train_decentral()
+		  self.__train_merge()
+		elif mode=='decentralize':
+		  self.__train_decentralize()
 
 
-	def predict(self, X_test):
+
+	def __build_graph(self):
 		'''
-		Args
-			X: a n_samples*n_features design matrix
-		'''
-
-		assert X_test.shape[1]==self.datasets_train[0][0].shape[1], '#features of testing and training data must equal'
-
-		if hasattr(self, 'sess'):
-			## fetch tensors and ops from graph
-			g = tf.get_default_graph()
-			X = g.get_tensor_by_name('input/X:0')
-			y_pred = g.get_tensor_by_name('output/y_pred:0')
-			y_pred = self.sess.run(y_pred, feed_dict = {X: X_test, K.learning_phase():0})
-		else:
-			print('Model has not been trained yet. Run fit() first')
-		
-		return y_pred
-
-
-	def _build_graph(self):
-		'''
-		Build a tensorflow graph; only call this within self.train()
+		Build a tensorflow graph. Call this within self.fit()
 		'''
 
-		feature_dim = self.datasets_train[0][0].shape[1]
-
-		tf.reset_default_graph()
+		input_shape = self.datasets_train[0][0].shape[1:]
 
 		with tf.name_scope('input'):
-			X = tf.placeholder(dtype=tf.float32, shape=[None, feature_dim], name='X')
-			idx1 = tf.placeholder(dtype=tf.int32, shape=[None, ], name='idx1')
-			idx2 = tf.placeholder(dtype=tf.int32, shape=[None, ], name='idx2')
-
-		with tf.name_scope('phase'):
-			phase = tf.identity(K.learning_phase(), name='phase')
+			X = tf.placeholder(dtype=tf.float32, shape=(None, )+input_shape, name='X')
+			time = tf.placeholder(dtype=tf.float32, shape=(None, ), name='time')
+			event = tf.placeholder(dtype=tf.int16, shape=(None, ), name='event')
 
 		with tf.name_scope('model'):
-			model = self.model_builder(feature_dim)
+			model = self.model_builder(input_shape)
 
 		with tf.name_scope('output'):
-			y_pred = tf.identity(model(X), name='y_pred')
-			y1 = tf.gather(y_pred, idx1)
-			y2 = tf.gather(y_pred, idx2)
+			score = tf.identity(model(X), name='score')
 
-		with tf.name_scope('metrics'):
+		with tf.name_scope('metric'):
+			ci = self.__concordance_index(score, time, event)
 			if self.loss_func=='hinge':
-				loss = tf.reduce_mean(tf.maximum(1+y1-y2, 0.0), name='loss')
-			elif self.loss_func=='logloss':
-				loss = tf.reduce_mean(tf.log(1+tf.exp(y1-y2)), name='loss')
-			ci = tf.reduce_mean(tf.cast(y1<y2, tf.float32), name='c_index')
+				loss = self.__hinge_loss(score, time, event)
+			elif self.loss_func=='log':
+				loss = self.__log_loss(score, time, event)
+			elif self.loss_func=='cox':
+				loss = self.__cox_loss(score, time, event)
 
 		with tf.name_scope('train'):
-			optimizer = tf.train.AdamOptimizer(learning_rate=0.001)
+			optimizer = tf.train.AdamOptimizer(learning_rate=self.lr)
 			train_op = optimizer.minimize(loss, name='train_op')
 
-		with tf.name_scope('init'):
-			init = tf.global_variables_initializer()
+		## save the tensors and ops so that we can use them later
+		self.__X = X
+		self.__time = time
+		self.__event = event
+		self.__score = score
+		self.__ci = ci
+		self.__loss = loss
+		self.__train_op = train_op
 
 
-	def _train_decentral(self):
+
+	def __train_decentralize(self):
 		'''
-		Train survival in a decentralized way. Each dataset is regarded as a mini-batch
+		Decentralized training mode. Each dataset is regarded as a mini-batch
 		'''
-
-		## precompute index pairs
-		index_pairs_train = utils.get_index_pairs(self.datasets_train) 
-		index_pairs_val = utils.get_index_pairs(self.datasets_val)
-
-		## fetch tensors and ops from graph
-		g = tf.get_default_graph()
-		X = g.get_tensor_by_name('input/X:0')
-		idx1 = g.get_tensor_by_name('input/idx1:0')
-		idx2 = g.get_tensor_by_name('input/idx2:0')
-		loss = g.get_tensor_by_name('metrics/loss:0')
-		ci = g.get_tensor_by_name('metrics/c_index:0')
-		train_op = g.get_operation_by_name('train/train_op')
-		init = g.get_operation_by_name('init/init')
 
 		## start training
-		sess = tf.Session()
-
-		sess.run(init)
-
+		self.__sess = tf.Session()
+		self.__sess.run(tf.global_variables_initializer())
 		for epoch in range(self.epochs):
-			for i, (X_batch, _, _) in enumerate(self.datasets_train):
-				idx1_batch, idx2_batch = index_pairs_train[i]
-				sess.run(train_op, feed_dict={X: X_batch, idx1: idx1_batch, idx2: idx2_batch, K.learning_phase(): 1})
+			for X_batch, time_batch, event_batch in self.datasets_train:
+				self.__sess.run(self.__train_op, feed_dict={self.__X: X_batch, self.__time: time_batch, self.__event: event_batch, K.learning_phase(): 1})
 			if epoch%100==0:
-				loss_train, ci_train = self._total_loss_ci(self.datasets_train, index_pairs_train, sess)
-				loss_val, ci_val = self._total_loss_ci(self.datasets_val, index_pairs_val, sess)
-				print('Epoch {0}: loss_train={1:5.4f}, ci_train={2:5.4f}, loss_val={3:5.4f}, ci_val={4:5.4f}'.format(epoch, loss_train, ci_train, loss_val, ci_val))
-		self.sess = sess
+				print('-'*20 + 'Epoch: {0}'.format(epoch) + '-'*20)
+				self.__print_loss_ci()
+				
 
 
-
-	def _train_merge(self):
+	def __train_merge(self):
 		'''
 		Merge training datasets into a single dataset. Sample mini-batches from the merged dataset for training
 		'''
-
-		## precompute index pairs
-		index_pairs_train = utils.get_index_pairs(self.datasets_train) 
-		index_pairs_val = utils.get_index_pairs(self.datasets_val)
 
 		## Merge training datasets
 		X_train, time_train, event_train = utils.combine_datasets(self.datasets_train)
@@ -156,60 +121,146 @@ class SurvivalModel:
 		## To fetch mini-batches
 		next_batch, num_batches = utils.batch_factory(X_train, time_train, event_train, self.batch_size)
 
-		## fetch tensors and ops from graph
-		g = tf.get_default_graph()
-		X = g.get_tensor_by_name('input/X:0')
-		idx1 = g.get_tensor_by_name('input/idx1:0')
-		idx2 = g.get_tensor_by_name('input/idx2:0')
-		loss = g.get_tensor_by_name('metrics/loss:0')
-		ci = g.get_tensor_by_name('metrics/c_index:0')
-		train_op = g.get_operation_by_name('train/train_op')
-		init = g.get_operation_by_name('init/init')
-
 		## start training
-		sess = tf.Session()
-
-		sess.run(init)
-
+		self.__sess = tf.Session()
+		self.__sess.run(tf.global_variables_initializer())
 		for epoch in range(self.epochs):
 			for _ in range(num_batches):
 				X_batch, time_batch, event_batch = next_batch()
-				idx1_batch, idx2_batch = utils.get_index_pairs([(X_batch, time_batch, event_batch)])[0]
-				sess.run(train_op, feed_dict={X: X_batch, idx1: idx1_batch, idx2: idx2_batch, K.learning_phase(): 1})
+				self.__sess.run(self.__train_op, feed_dict={self.__X: X_batch, self.__time: time_batch, self.__event: event_batch, K.learning_phase(): 1})
 			if epoch%100==0:
-				loss_train, ci_train = self._total_loss_ci(self.datasets_train, index_pairs_train, sess)
-				loss_val, ci_val = self._total_loss_ci(self.datasets_val, index_pairs_val, sess)
-				print('Epoch {0}: loss_train={1:5.4f}, ci_train={2:5.4f}, loss_val={3:5.4f}, ci_val={4:5.4f}'.format(epoch, loss_train, ci_train, loss_val, ci_val))
-		self.sess = sess
+				print('-'*20 + 'Epoch: {0}'.format(epoch) + '-'*20)
+				self.__print_loss_ci()
 
 
-	def _total_loss_ci(self, datasets, index_pairs, sess):
+
+	def predict(self, X_test):
 		'''
-		A function to make model eval eaiser; only call this in self._train_decentral() or self._train_merge()
+		Args
+			X: design matrix of shape (num_samples, ) + input_shape
 		'''
 
-		## fetch tensors from graph
-		g = tf.get_default_graph()
-		X = g.get_tensor_by_name('input/X:0')
-		idx1 = g.get_tensor_by_name('input/idx1:0')
-		idx2 = g.get_tensor_by_name('input/idx2:0')
-		loss = g.get_tensor_by_name('metrics/loss:0')
-		ci = g.get_tensor_by_name('metrics/c_index:0')
+		assert X_test.shape[1:]==self.datasets_train[0][0].shape[1:], 'Shapes of testing and training data must equal'
+		
+		return self.__sess.run(self.__score, feed_dict = {self.__X: X_test, K.learning_phase():0})
 
-		loss_total = 0
-		ci_total = 0
-		n_total = 0
 
-		for i, (X_batch, _, _) in enumerate(datasets):
-			idx1_batch, idx2_batch = index_pairs[i]
-			loss_batch, ci_batch = sess.run([loss, ci], feed_dict={X:X_batch, \
-																   idx1:idx1_batch, \
-																   idx2:idx2_batch, \
-																   K.learning_phase():0})
-			loss_total += len(idx1_batch)*loss_batch
-			ci_total += len(idx1_batch)*ci_batch
-			n_total += len(idx1_batch)
-		loss_total /= n_total
-		ci_total /= n_total
 
-		return loss_total, ci_total
+	def evaluate(self, X_test, time_test, event_test):
+		'''
+		Evaluate the loss and c-index of the model for the given test data
+		'''
+		assert X_test.shape[1:]==self.datasets_train[0][0].shape[1:], 'Shapes of testing and training data must equal'
+
+		return self.__sess.run([self.__loss, self.__ci], feed_dict = {self.__X: X_test, self.__time: time_test, self.__event: event_test, K.learning_phase(): 0})
+
+
+
+	def __concordance_index(self, score, time, event):
+		'''
+		Args
+			score: 		predicted score, tf tensor of shape (None, )
+			time:		true survival time, tf tensor of shape (None, )
+			event:		event, tf tensor of shape (None, )
+		'''
+
+		## find index pairs (i,j) satisfying time[i]<time[j] and event[i]==1
+		ix = tf.where(tf.logical_and(tf.expand_dims(time, axis=-1)<time, tf.expand_dims(tf.cast(event, tf.bool), axis=-1)), name='ix')
+
+		## count how many score[i]<score[j]
+		s1 = tf.gather(score, ix[:,0])
+		s2 = tf.gather(score, ix[:,1])
+		ci = tf.reduce_mean(tf.cast(s1<s2, tf.float32), name='c_index')
+
+		return ci
+
+
+
+	def __hinge_loss(self, score, time, event):
+		'''
+		Args
+			score:	 	predicted score, tf tensor of shape (None, 1)
+			time:		true survival time, tf tensor of shape (None, )
+			event:		event, tf tensor of shape (None, )
+		'''
+
+		## find index pairs (i,j) satisfying time[i]<time[j] and event[i]==1
+		ix = tf.where(tf.logical_and(tf.expand_dims(time, axis=-1)<time, tf.expand_dims(tf.cast(event, tf.bool), axis=-1)), name='ix')
+
+		## if score[i]>score[j], incur hinge loss
+		s1 = tf.gather(score, ix[:,0])
+		s2 = tf.gather(score, ix[:,1])
+		loss = tf.reduce_mean(tf.maximum(1+s1-s2, 0.0), name='loss')
+
+		return loss
+
+
+
+	def __log_loss(self, score, time, event):
+		'''
+		Args
+			score: 	predicted survival time, tf tensor of shape (None, 1)
+			time:		true survival time, tf tensor of shape (None, )
+			event:		event, tf tensor of shape (None, )
+		'''
+
+		## find index pairs (i,j) satisfying time[i]<time[j] and event[i]==1
+		ix = tf.where(tf.logical_and(tf.expand_dims(time, axis=-1)<time, tf.expand_dims(tf.cast(event, tf.bool), axis=-1)), name='ix')
+
+		## if score[i]>score[j], incur log loss
+		s1 = tf.gather(score, ix[:,0])
+		s2 = tf.gather(score, ix[:,1])
+		loss = tf.reduce_mean(tf.log(1+tf.exp(s1-s2)), name='loss')
+
+		return loss
+
+
+
+	def __cox_loss(self, score, time, event):
+		'''
+		Args
+			score: 		predicted survival time, tf tensor of shape (None, 1)
+			time:		true survival time, tf tensor of shape (None, )
+			event:		event, tf tensor of shape (None, )
+		Return
+			loss:		partial likelihood of cox regression
+		'''
+
+		## cox regression computes the risk score, we want the opposite
+		score = -score
+
+		## find index i satisfying event[i]==1
+		ix = tf.where(tf.cast(event, tf.bool)) # shape of ix is [None, 1]
+		
+		## sel_mat is a matrix where sel_mat[i,j]==1 where time[i]<=time[j]
+		sel_mat = tf.cast(tf.gather(time, ix)<=time, tf.float32)
+
+		## formula: \sum_i[s_i-\log(\sum_j{e^{s_j}})] where time[i]<=time[j] and event[i]==1
+		p_lik = tf.gather(score, ix) - tf.log(tf.reduce_sum(sel_mat * tf.transpose(tf.exp(score)), axis=-1))
+		loss = -tf.reduce_mean(p_lik)
+
+		return loss
+
+
+	def __print_loss_ci(self):
+		'''
+		Helper function to print the losses and c-indices on training & validation datasets
+		'''
+		## losses and c-indices on traning
+		loss_train = np.zeros(len(self.datasets_train))
+		ci_train = np.zeros(len(self.datasets_train))
+		for i, (X_batch, time_batch, event_batch) in enumerate(self.datasets_train):
+			loss_train[i], ci_train[i] = self.evaluate(X_batch, time_batch, event_batch)
+
+		## losses and c-indices on validation
+		loss_val = np.zeros(len(self.datasets_val))
+		ci_val = np.zeros(len(self.datasets_val))
+		for i, (X_batch, time_batch, event_batch) in enumerate(self.datasets_val):
+			loss_val[i], ci_val[i] = self.evaluate(X_batch, time_batch, event_batch)
+
+		## print them
+		print('loss_train={0}'.format(np.round(loss_train, 2)))
+		print('loss_val={0}'.format(np.round(loss_val, 2)))
+		print('ci_train={0}'.format(np.round(ci_train, 2)))
+		print('ci_val={0}'.format(np.round(ci_val, 2)))
+		print()
